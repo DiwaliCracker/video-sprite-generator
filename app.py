@@ -40,7 +40,7 @@ def download_video(video_url, output_path):
     try:
         app.logger.info(f"Attempting to download video from: {video_url}")
         # Use stream=True to handle potentially large files
-        response = requests.get(video_url, stream=True, timeout=120) # Increased timeout to match Gunicorn
+        response = requests.get(video_url, stream=True, timeout=120) # Increased timeout
         response.raise_for_status() # Raise an exception for bad HTTP status codes (4xx or 5xx)
 
         with open(output_path, 'wb') as f:
@@ -124,13 +124,12 @@ def generate_individual_thumbnails(video_path, output_dir, duration):
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=30) # Increased timeout
             
-            # --- FIX: Verify if the thumbnail file was actually created and is not empty ---
+            # Verify if the thumbnail file was actually created and is not empty
             if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
                 thumbnail_paths.append(thumb_path)
                 app.logger.debug(f"Generated thumbnail: {thumb_path} at {timestamp_str}")
             else:
                 app.logger.warning(f"Thumbnail file {thumb_path} not created or is empty. Skipping.")
-            # --- END FIX ---
 
         except subprocess.CalledProcessError as e:
             app.logger.error(f"FFmpeg error generating thumbnail {thumb_path} at {timestamp_str}: {e.stderr.decode().strip()}")
@@ -162,9 +161,14 @@ def create_sprite_image(thumbnail_paths, output_path):
     input_list_path = os.path.join(os.path.dirname(output_path), "input_thumbs.txt")
     try:
         with open(input_list_path, 'w') as f:
+            # Get the directory where input_thumbs.txt resides for relative paths
+            input_list_dir = os.path.dirname(input_list_path)
             for p in sorted(thumbnail_paths): # Sort to ensure correct order
-                f.write(f"file '{p}'\n")
+                # Write paths relative to the input_thumbs.txt file's directory
+                relative_path = os.path.relpath(p, input_list_dir)
+                f.write(f"file '{relative_path}'\n")
 
+        # Command to create the sprite image
         cmd = [
             'ffmpeg',
             '-f', 'concat',   # Input format is a concat list
@@ -175,17 +179,16 @@ def create_sprite_image(thumbnail_paths, output_path):
             output_path
         ]
         app.logger.info(f"Creating sprite image with command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, check=True, capture_output=True, timeout=120) # Increased timeout significantly
+        # Execute the FFmpeg command. Crucially, set cwd to the directory where input_thumbs.txt is.
+        result = subprocess.run(cmd, check=True, capture_output=True, timeout=120, cwd=input_list_dir) # Increased timeout significantly
         app.logger.info(f"Sprite image created successfully at: {output_path}")
         return True
     except FileNotFoundError:
         app.logger.error("FFmpeg not found. Ensure FFmpeg is installed and in PATH.")
         return False
     except subprocess.CalledProcessError as e:
-        # --- FIX: Log detailed FFmpeg error output ---
         app.logger.error(f"FFmpeg error creating sprite image: {e.stderr.decode().strip()}")
         app.logger.error(f"FFmpeg command failed: {' '.join(cmd)}")
-        # --- END FIX ---
         return False
     except subprocess.TimeoutExpired:
         app.logger.error(f"FFmpeg timeout creating sprite image for {output_path}")
@@ -324,9 +327,7 @@ def generate():
 
     except Exception as e:
         app.logger.error(f"Job {job_id}: An unhandled error occurred during generation: {e}", exc_info=True)
-        # --- FIX: Ensure JSON error response even for unhandled exceptions ---
         return jsonify({"status": "error", "message": f"An unexpected server error occurred: {e}"}), 500
-        # --- END FIX ---
     finally:
         # IMPORTANT: Clean up ALL temporary files associated with this job
         # This is crucial for managing disk space on Render's ephemeral storage.
