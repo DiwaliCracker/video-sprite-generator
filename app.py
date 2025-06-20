@@ -40,7 +40,7 @@ def download_video(video_url, output_path):
     try:
         app.logger.info(f"Attempting to download video from: {video_url}")
         # Use stream=True to handle potentially large files
-        response = requests.get(video_url, stream=True, timeout=30) # Add a timeout
+        response = requests.get(video_url, stream=True, timeout=60) # Increased timeout
         response.raise_for_status() # Raise an exception for bad HTTP status codes (4xx or 5xx)
 
         with open(output_path, 'wb') as f:
@@ -69,7 +69,7 @@ def get_video_duration(video_path):
             video_path
         ]
         # Run the command and capture its output
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=10)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=20) # Increased timeout
         duration = float(result.stdout.strip())
         app.logger.info(f"Video duration for {video_path}: {duration} seconds")
         return duration
@@ -122,9 +122,16 @@ def generate_individual_thumbnails(video_path, output_dir, duration):
             thumb_path
         ]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=20) # Add timeout for each thumb
-            thumbnail_paths.append(thumb_path)
-            # app.logger.debug(f"Generated thumbnail: {thumb_path} at {timestamp_str}")
+            subprocess.run(cmd, check=True, capture_output=True, timeout=30) # Increased timeout
+            
+            # --- FIX: Verify if the thumbnail file was actually created and is not empty ---
+            if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
+                thumbnail_paths.append(thumb_path)
+                app.logger.debug(f"Generated thumbnail: {thumb_path} at {timestamp_str}")
+            else:
+                app.logger.warning(f"Thumbnail file {thumb_path} not created or is empty. Skipping.")
+            # --- END FIX ---
+
         except subprocess.CalledProcessError as e:
             app.logger.error(f"FFmpeg error generating thumbnail {thumb_path} at {timestamp_str}: {e.stderr.decode().strip()}")
             app.logger.error(f"FFmpeg command failed: {' '.join(cmd)}")
@@ -143,12 +150,13 @@ def create_sprite_image(thumbnail_paths, output_path):
     using FFmpeg's tile filter.
     """
     if not thumbnail_paths:
-        app.logger.warning("No thumbnail paths provided to create sprite image.")
+        app.logger.warning("No valid thumbnail paths provided to create sprite image. Skipping sprite creation.")
         return False
 
     # Calculate number of rows needed for the sprite
     num_thumbnails = len(thumbnail_paths)
-    num_rows = math.ceil(num_thumbnails / THUMBS_PER_ROW)
+    # Ensure there's at least one row, even if only one thumbnail
+    num_rows = max(1, math.ceil(num_thumbnails / THUMBS_PER_ROW))
 
     # Create a temporary concat file list for FFmpeg
     input_list_path = os.path.join(os.path.dirname(output_path), "input_thumbs.txt")
@@ -166,16 +174,18 @@ def create_sprite_image(thumbnail_paths, output_path):
             '-q:v', '2',      # Output quality for JPEG
             output_path
         ]
-        app.logger.info(f"Creating sprite image: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True, capture_output=True, timeout=60) # Increased timeout
+        app.logger.info(f"Creating sprite image with command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, check=True, capture_output=True, timeout=120) # Increased timeout significantly
         app.logger.info(f"Sprite image created successfully at: {output_path}")
         return True
     except FileNotFoundError:
         app.logger.error("FFmpeg not found. Ensure FFmpeg is installed and in PATH.")
         return False
     except subprocess.CalledProcessError as e:
+        # --- FIX: Log detailed FFmpeg error output ---
         app.logger.error(f"FFmpeg error creating sprite image: {e.stderr.decode().strip()}")
         app.logger.error(f"FFmpeg command failed: {' '.join(cmd)}")
+        # --- END FIX ---
         return False
     except subprocess.TimeoutExpired:
         app.logger.error(f"FFmpeg timeout creating sprite image for {output_path}")
@@ -185,7 +195,10 @@ def create_sprite_image(thumbnail_paths, output_path):
         return False
     finally:
         if os.path.exists(input_list_path):
-            os.remove(input_list_path) # Always clean up the temporary list file
+            try:
+                os.remove(input_list_path) # Always clean up the temporary list file
+            except OSError as e:
+                app.logger.error(f"Error cleaning up input_thumbs.txt: {e}")
 
 
 def create_vtt_file(output_dir, num_thumbnails, interval, sprite_url_path):
@@ -267,27 +280,25 @@ def generate():
         if duration is None or duration <= 0:
             return jsonify({"status": "error", "message": "Could not get valid video duration. Video might be corrupted or empty."}), 500
         
-        # Ensure we don't try to generate too many thumbnails for very short videos
+        # Adjust thumbnail interval for very short videos to avoid excessive frames or no frames
         if duration < THUMBNAIL_INTERVAL:
-            app.logger.warning(f"Job {job_id}: Video is too short ({duration}s) for interval {THUMBNAIL_INTERVAL}s. Will adjust.")
-            # For very short videos, just take one thumbnail at the start
-            thumbnail_interval_for_vtt = duration # Or some other small value
-            num_actual_thumbnails = 1
+            app.logger.warning(f"Job {job_id}: Video is very short ({duration:.2f}s) for interval {THUMBNAIL_INTERVAL}s. Adjusting interval for VTT.")
+            # For very short videos, take one thumbnail at the beginning
+            # The interval for VTT calculation should be duration itself or a small fixed value
+            thumbnail_interval_for_vtt = max(1, math.floor(duration / 2)) if duration > 0 else 1 # ensures at least 1s interval for VTT
         else:
             thumbnail_interval_for_vtt = THUMBNAIL_INTERVAL
-            num_actual_thumbnails = math.ceil(duration / THUMBNAIL_INTERVAL)
 
-        app.logger.info(f"Job {job_id}: Video duration: {duration} seconds. Generating {num_actual_thumbnails} thumbnails...")
+        app.logger.info(f"Job {job_id}: Video duration: {duration:.2f} seconds. Generating individual thumbnails...")
         thumbnail_paths = generate_individual_thumbnails(video_path, temp_job_dir, duration)
         
         if not thumbnail_paths:
-            # If no thumbnails were generated, it's an error
-            return jsonify({"status": "error", "message": "Failed to generate any thumbnails. Video might be unreadable."}), 500
+            return jsonify({"status": "error", "message": "Failed to generate any valid thumbnails. Video might be unreadable or too short for extraction."}), 500
 
         app.logger.info(f"Job {job_id}: Generated {len(thumbnail_paths)} individual thumbnails. Creating sprite image...")
         sprite_output_path = os.path.join(temp_job_dir, SPRITE_FILENAME)
         if not create_sprite_image(thumbnail_paths, sprite_output_path):
-            return jsonify({"status": "error", "message": "Failed to create sprite image."}), 500
+            return jsonify({"status": "error", "message": "Failed to create sprite image. Check Render logs for FFmpeg details."}), 500
 
         app.logger.info(f"Job {job_id}: Creating VTT file...")
         # The sprite_url_path here is the *publicly accessible URL* for the sprite image
@@ -300,6 +311,7 @@ def generate():
         sprite_download_url = f'/thumbnails/{job_id}/{SPRITE_FILENAME}'
         vtt_download_url = f'/thumbnails/{job_id}/{VTT_FILENAME}'
 
+        app.logger.info(f"Job {job_id}: Successfully generated sprite and VTT.")
         return jsonify({
             "status": "success",
             "message": "Sprite and VTT generated successfully!",
@@ -309,18 +321,40 @@ def generate():
 
     except Exception as e:
         app.logger.error(f"Job {job_id}: An unhandled error occurred during generation: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": f"An internal server error occurred: {e}"}), 500
+        # --- FIX: Ensure JSON error response even for unhandled exceptions ---
+        return jsonify({"status": "error", "message": f"An unexpected server error occurred: {e}"}), 500
+        # --- END FIX ---
     finally:
         # IMPORTANT: Clean up ALL temporary files associated with this job
         # This is crucial for managing disk space on Render's ephemeral storage.
         if os.path.exists(video_path):
-            os.remove(video_path)
-            app.logger.info(f"Job {job_id}: Cleaned up input video: {video_path}")
+            try:
+                os.remove(video_path)
+                app.logger.info(f"Job {job_id}: Cleaned up input video: {video_path}")
+            except OSError as e:
+                app.logger.error(f"Error cleaning up video file {video_path}: {e}")
         
-        # We clean up individual thumbnails after sprite is created
-        # The temporary job directory containing the sprite and VTT will be left
-        # for a short period to allow client to download, but will be cleared
-        # on next app restart or scaling event.
+        # Clean up individual thumbnails
+        for p in thumbnail_paths:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError as e:
+                    app.logger.error(f"Error cleaning up individual thumbnail {p}: {e}")
+        
+        # While the sprite and VTT are served from temp_job_dir,
+        # Render's free tier will eventually remove this when the instance restarts.
+        # For very short-term serving: leave it. For robust cleanup,
+        # you might try to remove it after a delay or based on a background task.
+        # For this example, we leave the temp_job_dir with sprite/vtt for immediate download
+        # knowing it's ephemeral. If an error occurred earlier, temp_job_dir might be empty.
+        # We generally clean only the inputs and individual thumbs.
+        
+        # If you wanted to remove the whole job directory immediately,
+        # you'd move this outside the finally and perhaps use a background queue
+        # for real cleanup after serving.
+        app.logger.info(f"Job {job_id}: Finished processing. Check logs for cleanup status.")
+
 
 # Route to serve the generated sprite image and VTT file
 @app.route('/thumbnails/<job_id>/<filename>')
