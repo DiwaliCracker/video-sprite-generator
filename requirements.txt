@@ -1,0 +1,3 @@
+# video-sprite-generator/requirements.txt
+Flask
+requests
