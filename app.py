@@ -40,7 +40,7 @@ def download_video(video_url, output_path):
     try:
         app.logger.info(f"Attempting to download video from: {video_url}")
         # Use stream=True to handle potentially large files
-        response = requests.get(video_url, stream=True, timeout=60) # Increased timeout
+        response = requests.get(video_url, stream=True, timeout=120) # Increased timeout to match Gunicorn
         response.raise_for_status() # Raise an exception for bad HTTP status codes (4xx or 5xx)
 
         with open(output_path, 'wb') as f:
@@ -271,6 +271,9 @@ def generate():
     video_filename = f"input_{job_id}.mp4"
     video_path = os.path.join(app.config['UPLOAD_FOLDER'], video_filename)
 
+    # Initialize thumbnail_paths here to prevent UnboundLocalError
+    thumbnail_paths = [] 
+
     try:
         app.logger.info(f"Job {job_id}: Downloading video from {video_url}...")
         if not download_video(video_url, video_path):
@@ -334,25 +337,17 @@ def generate():
             except OSError as e:
                 app.logger.error(f"Error cleaning up video file {video_path}: {e}")
         
-        # Clean up individual thumbnails
-        for p in thumbnail_paths:
+        # Clean up individual thumbnails (if the list was populated)
+        for p in thumbnail_paths: # This loop now safe due to initialization
             if os.path.exists(p):
                 try:
                     os.remove(p)
                 except OSError as e:
                     app.logger.error(f"Error cleaning up individual thumbnail {p}: {e}")
         
-        # While the sprite and VTT are served from temp_job_dir,
-        # Render's free tier will eventually remove this when the instance restarts.
-        # For very short-term serving: leave it. For robust cleanup,
-        # you might try to remove it after a delay or based on a background task.
-        # For this example, we leave the temp_job_dir with sprite/vtt for immediate download
-        # knowing it's ephemeral. If an error occurred earlier, temp_job_dir might be empty.
-        # We generally clean only the inputs and individual thumbs.
-        
-        # If you wanted to remove the whole job directory immediately,
-        # you'd move this outside the finally and perhaps use a background queue
-        # for real cleanup after serving.
+        # We leave the temp_job_dir (containing sprite and VTT) for a short period
+        # to allow the client to download them. Render's ephemeral storage will
+        # eventually clean this up on instance restarts/scaling.
         app.logger.info(f"Job {job_id}: Finished processing. Check logs for cleanup status.")
 
 
