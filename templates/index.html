@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Sprite Generator</title>
+    <style>
+        body {
+            font-family: 'Inter', Arial, sans-serif; /* Using 'Inter' as specified */
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 768px; /* Responsive width */
+            width: 100%;
+            margin: 20px auto;
+            padding: 30px;
+            background-color: #ffffff;
+            border-radius: 12px; /* Rounded corners */
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            box-sizing: border-box; /* Include padding in element's total width and height */
+        }
+        h1 {
+            text-align: center;
+            color: #1a73e8; /* A Google-ish blue */
+            margin-bottom: 30px;
+            font-size: 2em;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="url"] {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 20px;
+            border: 1px solid #c8d1da;
+            border-radius: 8px; /* Rounded corners */
+            font-size: 16px;
+            box-sizing: border-box;
+            transition: border-color 0.3s ease;
+        }
+        input[type="url"]:focus {
+            border-color: #1a73e8;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.2);
+        }
+        button {
+            background-color: #1a73e8;
+            color: white;
+            padding: 14px 25px;
+            border: none;
+            border-radius: 8px; /* Rounded corners */
+            cursor: pointer;
+            font-size: 1.1em;
+            width: 100%;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #0d47a1;
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            background-color: #a0c4ff;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+        }
+        .result-box {
+            margin-top: 30px;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+            animation: fadeIn 0.5s ease-out;
+        }
+        .result-box p {
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+        .result-box a {
+            color: #1a73e8;
+            text-decoration: none;
+            word-break: break-all; /* Ensure long URLs wrap */
+        }
+        .result-box a:hover {
+            text-decoration: underline;
+        }
+        .error-message {
+            color: #d32f2f; /* Red for errors */
+            font-weight: bold;
+            margin-top: 15px;
+            text-align: center;
+        }
+        .loading-spinner {
+            border: 4px solid rgba(26, 115, 232, 0.2);
+            border-top-color: #1a73e8;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            display: none; /* Hidden by default */
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .hidden {
+            display: none;
+        }
+        pre {
+            background-color: #e8f0fe; /* Light blue background for code */
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto; /* Enable horizontal scrolling for long lines */
+            font-size: 0.85em;
+            color: #3f51b5; /* Darker blue for code text */
+            white-space: pre-wrap; /* Wrap long lines */
+            word-wrap: break-word; /* Break words if necessary */
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 600px) {
+            .container {
+                margin: 10px;
+                padding: 20px;
+            }
+            h1 {
+                font-size: 1.6em;
+            }
+            button {
+                padding: 12px 15px;
+                font-size: 1em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Video Sprite & VTT Generator</h1>
+        <form id="generatorForm">
+            <label for="video_url">Video URL:</label>
+            <input type="url" id="video_url" name="video_url" placeholder="e.g., https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" required>
+            <button type="submit" id="generateBtn">Generate Thumbnails</button>
+        </form>
+
+        <div class="loading-spinner" id="loadingSpinner"></div>
+        <div id="result" class="result-box hidden">
+            <p><strong>Status:</strong> <span id="statusMessage"></span></p>
+            <p><strong>Sprite Image:</strong> <a id="spriteLink" href="#" target="_blank"></a></p>
+            <p><strong>VTT File:</strong> <a id="vttLink" href="#" target="_blank"></a></p>
+            
+            <h3>Example Player Integration (HTML Snippet):</h3>
+            <pre id="playerSnippet"></pre>
+        </div>
+        <p id="errorMessage" class="error-message hidden"></p>
+    </div>
+
+    <script>
+        document.getElementById('generatorForm').addEventListener('submit', async function(event) {
+            event.preventDefault(); // Prevent default form submission
+
+            const videoUrl = document.getElementById('video_url').value;
+            const generateBtn = document.getElementById('generateBtn');
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            const resultDiv = document.getElementById('result');
+            const errorMessageDiv = document.getElementById('errorMessage');
+
+            // Reset UI and show loading state
+            resultDiv.classList.add('hidden');
+            errorMessageDiv.classList.add('hidden');
+            generateBtn.disabled = true;
+            generateBtn.textContent = 'Generating... Please wait, this might take a while for longer videos.';
+            loadingSpinner.style.display = 'block';
+
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    // Encode the video URL for form submission
+                    body: new URLSearchParams({ video_url: videoUrl }).toString(),
+                });
+
+                const data = await response.json(); // Parse the JSON response
+
+                if (response.ok) { // Check if the HTTP status code is in the 200s
+                    document.getElementById('statusMessage').textContent = data.message;
+                    document.getElementById('spriteLink').href = data.sprite_url;
+                    document.getElementById('spriteLink').textContent = data.sprite_url;
+                    document.getElementById('vttLink').href = data.vtt_url;
+                    document.getElementById('vttLink').textContent = data.vtt_url;
+                    resultDiv.classList.remove('hidden');
+
+                    // Generate the HTML snippet for player integration
+                    // Note: The video itself needs to be accessible by the player.
+                    // The VTT URL will point to your deployed Render app.
+                    const playerHtml = `&lt;video controls preload="metadata" width="640" height="360"&gt;
+    &lt;source src="${videoUrl}" type="video/mp4"&gt;
+    &lt;track kind="metadata" label="Thumbnails" srclang="en"
+        src="${data.vtt_url}"&gt;
+    Your browser does not support the video tag.
+&lt;/video&gt;
+
+&lt;style&gt;
+    /* Basic styling to show how player thumbnails might look */
+    video::cue {
+        /* This hides any text cues if they were present in the VTT,
+           as we are using it for image metadata */
+        display: none; 
+    }
+    video::cue-region {
+        /* Style the container for the thumbnail.
+           Players like Video.js handle the image display based on VTT. */
+        background-color: transparent;
+        border: none;
+        box-shadow: none;
+    }
+&lt;/style&gt;`;
+                    document.getElementById('playerSnippet').textContent = playerHtml;
+
+
+                } else {
+                    // Handle server-side errors (e.g., 400, 500)
+                    errorMessageDiv.textContent = data.message || "An unknown error occurred.";
+                    errorMessageDiv.classList.remove('hidden');
+                }
+            } catch (error) {
+                // Handle network errors or issues with JSON parsing
+                console.error('Fetch error:', error);
+                errorMessageDiv.textContent = "Network error or server unavailable. Details: " + error.message;
+                errorMessageDiv.classList.remove('hidden');
+            } finally {
+                // Always reset UI elements
+                generateBtn.disabled = false;
+                generateBtn.textContent = 'Generate Thumbnails';
+                loadingSpinner.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
